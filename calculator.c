@@ -5,36 +5,36 @@
 #define SIZE 1000
 
 int main() {
-    char expr[SIZE];
-    int nums[SIZE], nTop = -1;
-    char ops[SIZE]; int oTop = -1;
+    char expression[SIZE];
+    int numbers[SIZE], digitsTop = -1;
+    char operators[SIZE]; int operatorTop = -1;
     int i = 0;
 
     printf("Enter expression: ");
-    if (!fgets(expr, SIZE, stdin)) {
+    if (!fgets(expression, SIZE, stdin)) {
         printf("Error: Invalid input\n");
         return 0;
     }
 
-    while (expr[i] != '\0' && expr[i] != '\n') {
-        // skip spaces
-        if (expr[i] == ' ') {
+    while (expression[i] != '\0' && expression[i] != '\n') {
+        // if there are any spaces, skip it
+        if (expression[i] == ' ') {
             i++;
             continue;
         }
 
-        // read number
-        if (isdigit(expr[i])) {
-            int val = 0;
-            while (isdigit(expr[i])) {
-                val = val * 10 + (expr[i] - '0');
+        // if you read a digit, read the number fully
+        if (isdigit(expression[i])) {
+            int value = 0;
+            while (isdigit(expression[i])) {
+                value = value * 10 + (expression[i] - '0');
                 i++;
             }
-            nums[++nTop] = val;
+            numbers[++digitsTop] = value;
         }
-        // read operator
-        else if (expr[i] == '+' || expr[i] == '-' || expr[i] == '*' || expr[i] == '/') {
-            ops[++oTop] = expr[i];
+        // read the operator
+        else if (expression[i] == '+' || expression[i] == '-' || expression[i] == '*' || expression[i] == '/') {
+            operators[++operatorTop] = expression[i];
             i++;
         }
         else {
@@ -43,31 +43,36 @@ int main() {
         }
     }
 
-    // first handle * and /
-    int newNums[SIZE], newOps[SIZE], k = 0;
-    newNums[k++] = nums[0];
-    for (int j = 0; j <= oTop; j++) {
-        if (ops[j] == '*') {
-            newNums[k-1] = newNums[k-1] * nums[j+1];
-        } else if (ops[j] == '/') {
-            if (nums[j+1] == 0) {
+    // first we have to handle / & * according to precedence
+    int newNums[SIZE], k = 0;
+    char newOperators[SIZE];
+    newNums[k++] = numbers[0];
+    for (int j = 0; j <= operatorTop; j++) {
+        if (operators[j] == '*') {
+            newNums[k-1] = newNums[k-1] * numbers[j+1];
+        } else if (operators[j] == '/') {
+            if (numbers[j+1] == 0) {
                 printf("Error: Division by zero\n");
                 return 0;
             }
-            newNums[k-1] = newNums[k-1] / nums[j+1];
+            newNums[k-1] = newNums[k-1] / numbers[j+1];
         } else {
-            newOps[k-1] = ops[j];
-            newNums[k++] = nums[j+1];
+            newOperators[k-1] = operators[j];
+            newNums[k++] = numbers[j+1];
         }
     }
 
-    // then handle + and -
-    int result = newNums[0];
+    // then we have to handle + & -
+    int evaluatedValue = newNums[0];
     for (int j = 0; j < k-1; j++) {
-        if (newOps[j] == '+') result += newNums[j+1];
-        else result -= newNums[j+1];
+        if (newOperators[j] == '+') {
+            evaluatedValue += newNums[j+1];
+        } else {
+            evaluatedValue -= newNums[j+1];
+        }
     }
 
-    printf("%d\n", result);
+    printf("%d\n", evaluatedValue);
     return 0;
 }
+
