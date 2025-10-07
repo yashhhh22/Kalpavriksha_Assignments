@@ -10,15 +10,38 @@ struct User {
     int age;
 };
 
-void addUser() {
-    struct User u;
-    FILE *fp = fopen(FILE_NAME, "a");
-    if (!fp) {
+void addUser()
+{
+    struct User u, temp;
+    FILE *fp;
+    fp = fopen(FILE_NAME, "r");
+    if (fp)
+    {
+        printf("Enter ID: ");
+        scanf("%d", &u.id);
+        while (fscanf(fp, "%d %s %d", &temp.id, temp.name, &temp.age) == 3)
+        {
+            if (temp.id == u.id)
+            {
+                printf("User ID already exists. Cannot add duplicate.\n");
+                fclose(fp);
+                return; 
+            }
+        }
+        fclose(fp);
+    }
+    else
+    {
+        printf("Enter ID: ");
+        scanf("%d", &u.id);
+    }
+    fp = fopen(FILE_NAME, "a");
+    if (!fp)
+    {
         printf("Cannot open file\n");
         return;
     }
-    printf("Enter ID: ");
-    scanf("%d", &u.id);
+
     printf("Enter Name: ");
     scanf("%s", u.name);
     printf("Enter Age: ");
@@ -26,8 +49,10 @@ void addUser() {
 
     fprintf(fp, "%d %s %d\n", u.id, u.name, u.age);
     fclose(fp);
-    printf("User added!\n");
+
+    printf("User added successfully!\n");
 }
+
 
 void showUsers() {
     struct User u;
@@ -72,8 +97,11 @@ void updateUser() {
     remove(FILE_NAME);
     rename("temp.txt", FILE_NAME);
 
-    if (found) printf("User updated!\n");
-    else printf("User not found\n");
+    if (found) {
+        printf("User updated!\n");
+    } else {
+        printf("User not found\n");
+    }
 }
 
 void deleteUser() {
@@ -102,8 +130,11 @@ void deleteUser() {
     remove(FILE_NAME);
     rename("temp.txt", FILE_NAME);
 
-    if (found) printf("User deleted!\n");
-    else printf("User not found\n");
+    if (found) {
+        printf("User deleted!\n");
+    } else {
+        printf("User not found\n");
+    }
 }
 
 int main() {
@@ -114,12 +145,22 @@ int main() {
         printf("Enter choice: ");
         scanf("%d", &ch);
 
-        if (ch == 1) addUser();
-        else if (ch == 2) showUsers();
-        else if (ch == 3) updateUser();
-        else if (ch == 4) deleteUser();
-        else if (ch == 5) exit(0);
-        else printf("Invalid choice\n");
+        if (ch == 1) {
+            addUser();
+        } else if (ch == 2) {
+            showUsers();
+        } else if (ch == 3) {
+            updateUser();
+        } else if (ch == 4) {
+            deleteUser();
+        } else if (ch == 5) {
+            printf("Exiting program...\n");
+            return 0;
+        }
+        else {
+            printf("Invalid choice\n");
+        }
     }
     return 0;
 }
+
