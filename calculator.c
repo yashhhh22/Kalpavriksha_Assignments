@@ -6,9 +6,9 @@
 
 int main() {
     char expression[SIZE];
-    int numbers[SIZE], digitsTop = -1;
-    char operators[SIZE]; int operatorTop = -1;
-    int i = 0;
+    int numbers[SIZE], numTop = -1;
+    char operators[SIZE];
+    int opTop = -1;
 
     printf("Enter expression: ");
     if (!fgets(expression, SIZE, stdin)) {
@@ -16,26 +16,51 @@ int main() {
         return 0;
     }
 
+    // We have to first skip the leading spaces
+    int i = 0;
+    while (expression[i] == ' ') {
+        i++;
+    }
+
+    if (expression[i] == '\0' || expression[i] == '\n') {
+        printf("Error: Empty expression\n");
+        return 0;
+    }
+
+    int expectNumber = 1;  // we have to track if the next character we are expecting is a number or an operator
+
     while (expression[i] != '\0' && expression[i] != '\n') {
-        // if there are any spaces, skip it
-        if (expression[i] == ' ') {
+        if (isspace(expression[i])) {
             i++;
             continue;
         }
 
-        // if you read a digit, read the number fully
+        int sign = 1; // for unary operators
+        if (expectNumber && (expression[i] == '+' || expression[i] == '-')) {
+            if (expression[i] == '-') {
+                sign = -1;
+            }
+            i++;
+            while (expression[i] == ' ') {
+                i++; // we have to skip spaces after unary operator
+            }
+        }
+
         if (isdigit(expression[i])) {
-            int value = 0;
-            while (isdigit(expression[i])) {
-                value = value * 10 + (expression[i] - '0');
+            long value = 0;
+            while (isdigit(expression[i]) || expression[i] == ' ') {
+                if (isdigit(expression[i])) {
+                    value = value * 10 + (expression[i] - '0');
+                }
                 i++;
             }
-            numbers[++digitsTop] = value;
+            numbers[++numTop] = sign * value;
+            expectNumber = 0; // after the number we expect an operator
         }
-        // read the operator
-        else if (expression[i] == '+' || expression[i] == '-' || expression[i] == '*' || expression[i] == '/') {
-            operators[++operatorTop] = expression[i];
+        else if (!expectNumber && (expression[i] == '+' || expression[i] == '-' || expression[i] == '*' || expression[i] == '/')) {
+            operators[++opTop] = expression[i];
             i++;
+            expectNumber = 1; // after operator, expect number
         }
         else {
             printf("Error: Invalid expression\n");
@@ -43,29 +68,28 @@ int main() {
         }
     }
 
-    // first we have to handle / & * according to precedence
+    // We have to handle * and / first according to the precedence rule
     int newNums[SIZE], k = 0;
-    char newOperators[SIZE];
+    char newOps[SIZE];
     newNums[k++] = numbers[0];
-    for (int j = 0; j <= operatorTop; j++) {
+    for (int j = 0; j <= opTop; j++) {
         if (operators[j] == '*') {
-            newNums[k-1] = newNums[k-1] * numbers[j+1];
+            newNums[k-1] *= numbers[j+1];
         } else if (operators[j] == '/') {
             if (numbers[j+1] == 0) {
                 printf("Error: Division by zero\n");
                 return 0;
             }
-            newNums[k-1] = newNums[k-1] / numbers[j+1];
+            newNums[k-1] /= numbers[j+1];
         } else {
-            newOperators[k-1] = operators[j];
+            newOps[k-1] = operators[j];
             newNums[k++] = numbers[j+1];
         }
     }
 
-    // then we have to handle + & -
     int evaluatedValue = newNums[0];
     for (int j = 0; j < k-1; j++) {
-        if (newOperators[j] == '+') {
+        if (newOps[j] == '+') {
             evaluatedValue += newNums[j+1];
         } else {
             evaluatedValue -= newNums[j+1];
@@ -75,4 +99,3 @@ int main() {
     printf("%d\n", evaluatedValue);
     return 0;
 }
-
