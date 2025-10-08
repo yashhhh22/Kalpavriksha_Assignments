@@ -4,12 +4,14 @@
 
 #define FILE_NAME "users.txt"
 
+// user structure to store each user data
 struct User {
     int id;
     char name[50];
     int age;
 };
 
+// whenever we have to add a user
 void addUser()
 {
     struct User u, temp;
@@ -53,7 +55,7 @@ void addUser()
     printf("User added successfully!\n");
 }
 
-
+// show all the users added
 void showUsers() {
     struct User u;
     FILE *fp = fopen(FILE_NAME, "r");
@@ -68,6 +70,7 @@ void showUsers() {
     fclose(fp);
 }
 
+// update the data of the users
 void updateUser() {
     struct User u;
     int id, found = 0;
@@ -104,6 +107,7 @@ void updateUser() {
     }
 }
 
+// delete the user added before
 void deleteUser() {
     struct User u;
     int id, found = 0;
@@ -138,22 +142,22 @@ void deleteUser() {
 }
 
 int main() {
-    int ch;
+    int option;
     while (1) {
         printf("\n--- Menu ---\n");
         printf("1.Add User\n2.Show Users\n3.Update User\n4.Delete User\n5.Exit\n");
         printf("Enter choice: ");
-        scanf("%d", &ch);
+        scanf("%d", &option);
 
-        if (ch == 1) {
+        if (option == 1) {
             addUser();
-        } else if (ch == 2) {
+        } else if (option == 2) {
             showUsers();
-        } else if (ch == 3) {
+        } else if (option == 3) {
             updateUser();
-        } else if (ch == 4) {
+        } else if (option == 4) {
             deleteUser();
-        } else if (ch == 5) {
+        } else if (option == 5) {
             printf("Exiting program...\n");
             return 0;
         }
@@ -163,4 +167,5 @@ int main() {
     }
     return 0;
 }
+
 
