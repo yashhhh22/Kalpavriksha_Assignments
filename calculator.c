@@ -5,60 +5,60 @@
 #define SIZE 1000
 
 int main() {
-    char expression[SIZE];
-    int numbers[SIZE], numTop = -1;
-    char operators[SIZE];
-    int opTop = -1;
+    char inputExpression[SIZE];
+    int operandStack[SIZE], operandTop = -1;
+    char operatorStack[SIZE];
+    int operatorTop = -1;
 
     printf("Enter expression: ");
-    if (!fgets(expression, SIZE, stdin)) {
+    if (!fgets(inputExpression, SIZE, stdin)) {
         printf("Error: Invalid input\n");
         return 0;
     }
 
     // We have to first skip the leading spaces
     int i = 0;
-    while (expression[i] == ' ') {
+    while (inputExpression[i] == ' ') {
         i++;
     }
 
-    if (expression[i] == '\0' || expression[i] == '\n') {
+    if (inputExpression[i] == '\0' || inputExpression[i] == '\n') {
         printf("Error: Empty expression\n");
         return 0;
     }
 
     int expectNumber = 1;  // we have to track if the next character we are expecting is a number or an operator
 
-    while (expression[i] != '\0' && expression[i] != '\n') {
-        if (isspace(expression[i])) {
+    while (inputExpression[i] != '\0' && inputExpression[i] != '\n') {
+        if (isspace(inputExpression[i])) {
             i++;
             continue;
         }
 
         int sign = 1; // for unary operators
-        if (expectNumber && (expression[i] == '+' || expression[i] == '-')) {
-            if (expression[i] == '-') {
+        if (expectNumber && (inputExpression[i] == '+' || inputExpression[i] == '-')) {
+            if (inputExpression[i] == '-') {
                 sign = -1;
             }
             i++;
-            while (expression[i] == ' ') {
+            while (inputExpression[i] == ' ') {
                 i++; // we have to skip spaces after unary operator
             }
         }
 
-        if (isdigit(expression[i])) {
+        if (isdigit(inputExpression[i])) {
             long value = 0;
-            while (isdigit(expression[i]) || expression[i] == ' ') {
-                if (isdigit(expression[i])) {
-                    value = value * 10 + (expression[i] - '0');
+            while (isdigit(inputExpression[i]) || inputExpression[i] == ' ') {
+                if (isdigit(inputExpression[i])) {
+                    value = value * 10 + (inputExpression[i] - '0');
                 }
                 i++;
             }
-            numbers[++numTop] = sign * value;
+            operandStack[++operandTop] = sign * value;
             expectNumber = 0; // after the number we expect an operator
         }
-        else if (!expectNumber && (expression[i] == '+' || expression[i] == '-' || expression[i] == '*' || expression[i] == '/')) {
-            operators[++opTop] = expression[i];
+        else if (!expectNumber && (inputExpression[i] == '+' || inputExpression[i] == '-' || inputExpression[i] == '*' || inputExpression[i] == '/')) {
+            operatorStack[++operatorTop] = inputExpression[i];
             i++;
             expectNumber = 1; // after operator, expect number
         }
@@ -69,33 +69,34 @@ int main() {
     }
 
     // We have to handle * and / first according to the precedence rule
-    int newNums[SIZE], k = 0;
-    char newOps[SIZE];
-    newNums[k++] = numbers[0];
-    for (int j = 0; j <= opTop; j++) {
-        if (operators[j] == '*') {
-            newNums[k-1] *= numbers[j+1];
-        } else if (operators[j] == '/') {
-            if (numbers[j+1] == 0) {
+    int newOperandStack[SIZE], k = 0;
+    char newOperatorStack[SIZE];
+    newOperandStack[k++] = operandStack[0];
+    for (int j = 0; j <= operatorTop; j++) {
+        if (operatorStack[j] == '*') {
+            newOperandStack[k-1] *= operandStack[j+1];
+        } else if (operatorStack[j] == '/') {
+            if (operandStack[j+1] == 0) {
                 printf("Error: Division by zero\n");
                 return 0;
             }
-            newNums[k-1] /= numbers[j+1];
+            newOperandStack[k-1] /= operandStack[j+1];
         } else {
-            newOps[k-1] = operators[j];
-            newNums[k++] = numbers[j+1];
+            newOperatorStack[k-1] = operatorStack[j];
+            newOperandStack[k++] = operandStack[j+1];
         }
     }
 
-    int evaluatedValue = newNums[0];
+    int evaluatedValue = newOperandStack[0];
     for (int j = 0; j < k-1; j++) {
-        if (newOps[j] == '+') {
-            evaluatedValue += newNums[j+1];
+        if (newOperatorStack[j] == '+') {
+            evaluatedValue += newOperandStack[j+1];
         } else {
-            evaluatedValue -= newNums[j+1];
+            evaluatedValue -= newOperandStack[j+1];
         }
     }
 
     printf("%d\n", evaluatedValue);
     return 0;
 }
+
