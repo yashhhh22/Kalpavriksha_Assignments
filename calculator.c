@@ -99,4 +99,3 @@ int main() {
     printf("%d\n", evaluatedValue);
     return 0;
 }
-
