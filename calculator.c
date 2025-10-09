@@ -30,7 +30,7 @@ int main() {
     int expectNumber = 1;  // we have to track if the next character we are expecting is a number or an operator
 
     while (inputExpression[i] != '\0' && inputExpression[i] != '\n') {
-        if (isspace(inputExpression[i])) {
+        if (isspace((unsigned char)inputExpression[i])) {
             i++;
             continue;
         }
@@ -46,7 +46,7 @@ int main() {
             }
         }
 
-        if (isdigit(inputExpression[i])) {
+        if (isdigit((unsigned char)inputExpression[i])) {
             long value = 0;
             while (isdigit(inputExpression[i]) || inputExpression[i] == ' ') {
                 if (isdigit(inputExpression[i])) {
