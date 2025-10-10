@@ -162,6 +162,3 @@ int main() {
     printf("List of Roll Numbers (via recursion): ");
     rollNumbers(details, N, 0);
 }
-
-
-
