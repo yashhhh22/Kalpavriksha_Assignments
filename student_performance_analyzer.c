@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <ctype.h>
 
 # define MAX_STUDENTS 100
 
@@ -17,8 +18,8 @@ int total(int marks1, int marks2, int marks3) {
     return marks1 + marks2 + marks3;
 }
 
-float average(struct Student s) {
-    return total(s.marks1, s.marks2, s.marks3) / 3.0;
+float average(struct Student student_detail) {
+    return total(student_detail.marks1, student_detail.marks2, student_detail.marks3) / 3.0;
 }
 
 char grade(float average) {
@@ -107,7 +108,7 @@ int main() {
             int roll, m1, m2, m3;
             char name[50];
 
-            if(sscanf(line, "%d %49[^\t\n] %d %d %d", &roll, name, &m1, &m2, &m3) != 5) {
+            if(sscanf(line, "%d %49[^0-9\n] %d %d %d", &roll, name, &m1, &m2, &m3) != 5) {
                 printf("Invalid input! Enter again:\n");
                 continue;
             }
@@ -159,6 +160,6 @@ int main() {
         
     }
 
-    printf("List of Roll Numbers (via recursion): ");
+    printf("\nList of Roll Numbers (via recursion): ");
     rollNumbers(details, N, 0);
 }
