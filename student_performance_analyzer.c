@@ -84,9 +84,9 @@ int main() {
         sscanf(line, "%d %49s %d %d %d", 
             &details[i].rollNo,
             details[i].name,
-            details[i].marks1,
-            details[i].marks2,
-            details[i].marks3
+            &details[i].marks1,
+            &details[i].marks2,
+            &details[i].marks3
         );
     }
 
@@ -110,3 +110,4 @@ int main() {
     printf("\nList of Roll Numbers (via recursion): ");
     rollNumbers(details, N, 0);
 }
+
