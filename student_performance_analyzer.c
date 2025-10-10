@@ -75,13 +75,19 @@ int main() {
     // add the details of the students
     printf("\nEnter the details of students:\n");
     for(int i=0; i<N; i++) {
-        scanf("%d", &details[i].rollNo);
-        getchar();
+        char line[100];
 
-        fgets(details[i].name, sizeof(details[i].name), stdin);
-        details[i].name[strcspn(details[i].name, "\n")] = 0;
+        fgets(line, sizeof(line), stdin); 
+        
+        line[strcspn(line, "\n")] = 0;
 
-        scanf("%d %d %d", &details[i].marks1, &details[i].marks2, &details[i].marks3);
+        sscanf(line, "%d %49s %d %d %d", 
+            &details[i].rollNo,
+            details[i].name,
+            details[i].marks1,
+            details[i].marks2,
+            details[i].marks3
+        );
     }
 
     // print the details of the students
