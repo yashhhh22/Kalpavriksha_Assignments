@@ -157,7 +157,6 @@ int main() {
         }
         printf("Performance: ");
         printStars(grd);
-        
     }
 
     printf("\nList of Roll Numbers (via recursion): ");
