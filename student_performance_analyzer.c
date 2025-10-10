@@ -54,6 +54,8 @@ void printStars(char grade) {
     for(int i=0; i<stars; i++) {
         printf("*");
     }
+
+    printf("\n");
 }
 
 void rollNumbers(struct Student details[], int N, int index) {
@@ -69,7 +71,8 @@ int main() {
     int N;
     printf("Enter the number of students: ");
     scanf("%d", &N);
-
+    getchar();
+    
     struct Student details[MAX_STUDENTS];
 
     // add the details of the students
@@ -81,7 +84,7 @@ int main() {
         
         line[strcspn(line, "\n")] = 0;
 
-        sscanf(line, "%d %49s %d %d %d", 
+        sscanf(line, "%d %49[^\t\n] %d %d %d", 
             &details[i].rollNo,
             details[i].name,
             &details[i].marks1,
@@ -107,7 +110,8 @@ int main() {
         
     }
 
-    printf("\nList of Roll Numbers (via recursion): ");
+    printf("List of Roll Numbers (via recursion): ");
     rollNumbers(details, N, 0);
 }
+
 
