@@ -25,7 +25,8 @@ void getValidString(char *name, const char *displayText);
 
 void initializeProducts(Product *products, int count);
 void handleMenu(Product **products, int *count);
-int caseSensitiveMatch(const char *productName, const char *searchName);
+int caseInsensitiveMatch(const char *productName, const char *searchName);
+int isUniqueId(const Product *product, int count, int newProductId);
 
 void addProduct(Product **products, int *count);
 void viewProducts(const Product *products, int count);
@@ -50,7 +51,7 @@ int main() {
 
     initializeProducts(products, numberOfProducts);
     handleMenu(&products, &numberOfProducts);
-
+    
     return 0;
 }
 
@@ -196,6 +197,16 @@ void handleMenu(Product **products, int *count) {
     } while (choice != 8);
 }
 
+int isUniqueId(const Product *product, int count, int newProductId) {
+    for (int productIndex = 0; productIndex < count; productIndex++) {
+        if ((product + productIndex)->product_id == newProductId) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
 void addProduct(Product **products, int *count) {
     if (*count >= INITIAL_NUMBER_OF_PRODUCTS) {
         printf("Cannot add more products (limit reached).\n");
@@ -212,7 +223,18 @@ void addProduct(Product **products, int *count) {
     Product *newProduct = &((*products)[*count]);
 
     printf("\nEnter new product details:\n");
-    newProduct->product_id = getValidIntegerInRange(MINIMUM_ID, MAXIMUM_ID, "Product ID: ");
+
+    int newProductId;
+    while (1) {
+        newProductId = getValidIntegerInRange(MINIMUM_ID, MAXIMUM_ID, "Product ID: ");
+        if (!isUniqueId(*products, *count, newProductId)) {
+            printf("Product ID %d already exists. Please enter a unique id.\n", newProductId);
+            continue;
+        }
+        break;
+    }
+    newProduct->product_id = newProductId;
+
     getValidString(newProduct->product_name, "Product Name: ");
     newProduct->product_price = getValidFloatInRange(MINIMUM_PRICE, MAXIMUM_PRICE, "Product Price: ");
     newProduct->product_quantity = getValidIntegerInRange(MINIMUM_QUANTITY, MAXIMUM_QUANTITY, "Product Quantity: ");
@@ -261,14 +283,14 @@ void searchByID(const Product *products, int count) {
     printf("Product not found!\n");
 }
 
-int caseSensitiveMatch(const char *productName, const char *searchName) {
+int caseInsensitiveMatch(const char *productName, const char *searchName) {
     char character1, character2;
     int productNameIndex, searchNameIndex;
 
     for (productNameIndex = 0; productName[productNameIndex] != '\0'; productNameIndex++) {
         for (searchNameIndex = 0; searchName[searchNameIndex] != '\0'; searchNameIndex++) {
-            character1 = (unsigned char)productName[productNameIndex + searchNameIndex];
-            character2 = (unsigned char)searchName[searchNameIndex];
+            character1 = tolower((unsigned char)productName[productNameIndex + searchNameIndex]);
+            character2 = tolower((unsigned char)searchName[searchNameIndex]);
 
             if (character1 != character2 || productName[productNameIndex + searchNameIndex] == '\0') {
                 break;
@@ -291,7 +313,7 @@ void searchByName(const Product *products, int count) {
     name[strcspn(name, "\n")] = '\0';
 
     for (int productIndex = 0; productIndex < count; productIndex++) {
-        if (caseSensitiveMatch(products[productIndex].product_name, name)) {
+        if (caseInsensitiveMatch(products[productIndex].product_name, name)) {
             printf("Product ID: %d | Name: %s | Price: %.2f | Quantity: %d\n",
                    products[productIndex].product_id, products[productIndex].product_name,
                    products[productIndex].product_price, products[productIndex].product_quantity);
@@ -299,8 +321,9 @@ void searchByName(const Product *products, int count) {
         }
     }
 
-    if (!found)
+    if (!found) {
         printf("No products match the given name.\n");
+    }
 }
 
 void searchByPriceRange(const Product *products, int count) {
