@@ -131,7 +131,16 @@ void getValidString(char *name, const char *displayText) {
 void initializeProducts(Product *products, int count) {
     for (int productIndex = 0; productIndex < count; productIndex++) {
         printf("\nEnter details for product %d:\n", productIndex + 1);
-        products[productIndex].product_id = getValidIntegerInRange(MINIMUM_ID, MAXIMUM_ID, "Product ID: ");
+        int id;
+        while (1) {
+            id = getValidIntegerInRange(MINIMUM_ID, MAXIMUM_ID, "Product ID: ");
+            if (!isUniqueId(products, count, id)) {
+                printf("Product ID %d already exists. Please enter a unique id.\n", id);
+                continue;
+            }
+            break;
+        }
+        products[productIndex].product_id = id;
         getValidString(products[productIndex].product_name, "Product Name: ");
         products[productIndex].product_price = getValidFloatInRange(MINIMUM_PRICE, MAXIMUM_PRICE, "Product Price: ");
         products[productIndex].product_quantity = getValidIntegerInRange(MINIMUM_QUANTITY, MAXIMUM_QUANTITY, "Product Quantity: ");
