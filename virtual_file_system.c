@@ -40,6 +40,12 @@ void initializeFreeBlocks()
     for (int index = 0; index < TOTAL_DISK_BLOCKS; index++)
     {
         DiskBlock *newBlock = (DiskBlock *)malloc(sizeof(DiskBlock));
+        if (newBlock == NULL)
+        {
+            printf("Memory allocation failed");
+            return;
+        }
+
         newBlock->blockIndex = index;
         newBlock->next = NULL;
         newBlock->previous = prevBlock;
@@ -62,6 +68,12 @@ void initializeVFS()
     initializeFreeBlocks();
 
     rootDirectory = (Node *)malloc(sizeof(Node));
+    if (rootDirectory == NULL)
+    {
+        printf("Memory allocation failed");
+        return;
+    }
+
     rootDirectory->isFolder = 1;
     rootDirectory->parent = NULL;
     rootDirectory->firstChild = NULL;
@@ -100,6 +112,12 @@ void releaseFileBlocks(Node *file)
         if (blockIdx >= 0)
         {
             DiskBlock *restoredBlock = (DiskBlock *)malloc(sizeof(DiskBlock));
+            if (restoredBlock == NULL)
+            {
+                printf("Memory allocation failed");
+                return;
+            }
+
             restoredBlock->blockIndex = blockIdx;
             restoredBlock->next = freeBlockListHead;
             if (freeBlockListHead)
@@ -132,6 +150,12 @@ void makeDirectory(char *folderName)
     }
 
     Node *newFolder = (Node *)malloc(sizeof(Node));
+    if (newFolder == NULL)
+    {
+        printf("Memory allocation failed");
+        return;
+    }
+
     strcpy(newFolder->name, folderName);
     newFolder->isFolder = 1;
     newFolder->parent = currentDirectory;
@@ -253,6 +277,12 @@ void createFile(char *fileName)
     }
 
     Node *newFile = (Node *)malloc(sizeof(Node));
+    if (newFile == NULL) 
+    {
+        printf("Memory allocation failed.");
+        return;
+    }
+    
     strcpy(newFile->name, fileName);
     newFile->isFolder = 0;
     newFile->parent = currentDirectory;
