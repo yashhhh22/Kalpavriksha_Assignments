@@ -14,20 +14,20 @@ typedef struct CacheNode
     struct CacheNode *next;
 } CacheNode;
 
-typedef struct HashEntry
+typedef struct HashNode
 {
     int key;
     CacheNode *node;
-    struct HashEntry *next;
-} HashEntry;
+    struct HashNode *next;
+} HashNode;
 
 typedef struct LRUCache
 {
     int capacity;
     int size;
-    CacheNode *head;       
-    CacheNode *tail;  
-    HashEntry *buckets[HASH_TABLE_BUCKETS];
+    CacheNode *head;
+    CacheNode *tail;
+    HashNode *buckets[HASH_TABLE_BUCKETS];
 } LRUCache;
 
 static char* string_duplicate(const char *source)
@@ -80,28 +80,61 @@ static void trim_whitespace(char *text)
     }
 }
 
-static HashEntry* hash_find_entry(LRUCache *cache, int key)
+static int is_valid_int_string(const char *string)
+{
+    if (string == NULL || *string == '\0')
+    {
+        return 0;
+    }
+
+    const char *pointerToString = string;
+    if (*pointerToString == '+' || *pointerToString == '-')
+    {
+        pointerToString++;
+    }
+
+    if (*pointerToString == '\0')
+    {
+        return 0;
+    }
+
+    while (*pointerToString)
+    {
+        if (!isdigit((unsigned char)*pointerToString))
+        {
+            return 0;
+        }
+        pointerToString++;
+    }
+
+    return 1;
+}
+
+static HashNode* hash_find_entry(LRUCache *cache, int key)
 {
     unsigned int index = bucket_index_for_key(key);
-    HashEntry *iterator = cache->buckets[index];
+    HashNode *iterator = cache->buckets[index];
+
     while (iterator != NULL)
     {
-        if (iterator -> key == key)
+        if (iterator->key == key)
         {
             return iterator;
         }
-        iterator = iterator -> next;
+        iterator = iterator->next;
     }
+
     return NULL;
 }
 
 static void hash_insert_entry(LRUCache *cache, int key, CacheNode *node)
 {
     unsigned int index = bucket_index_for_key(key);
-    HashEntry *iterator = cache->buckets[index];
+    HashNode *iterator = cache->buckets[index];
+
     while (iterator != NULL)
     {
-        if (iterator -> key == key)
+        if (iterator->key == key)
         {
             iterator->node = node;
             return;
@@ -109,12 +142,13 @@ static void hash_insert_entry(LRUCache *cache, int key, CacheNode *node)
         iterator = iterator->next;
     }
 
-    HashEntry *newEntry = (HashEntry *) malloc(sizeof(HashEntry));
+    HashNode *newEntry = (HashNode *) malloc(sizeof(HashNode));
     if (newEntry == NULL)
     {
         fprintf(stderr, "hash_insert_entry: out of memory\n");
         exit(EXIT_FAILURE);
     }
+
     newEntry->key = key;
     newEntry->node = node;
     newEntry->next = cache->buckets[index];
@@ -124,12 +158,12 @@ static void hash_insert_entry(LRUCache *cache, int key, CacheNode *node)
 static void hash_remove_entry(LRUCache *cache, int key)
 {
     unsigned int index = bucket_index_for_key(key);
-    HashEntry *iterator = cache->buckets[index];
-    HashEntry *previous = NULL;
+    HashNode *iterator = cache->buckets[index];
+    HashNode *previous = NULL;
 
     while (iterator != NULL)
     {
-        if (iterator -> key == key)
+        if (iterator->key == key)
         {
             if (previous == NULL)
             {
@@ -142,6 +176,7 @@ static void hash_remove_entry(LRUCache *cache, int key)
             free(iterator);
             return;
         }
+
         previous = iterator;
         iterator = iterator->next;
     }
@@ -171,10 +206,12 @@ static void move_node_to_front(LRUCache *cache, CacheNode *node)
 
     node->previous = NULL;
     node->next = cache->head;
+
     if (cache->head != NULL)
     {
         cache->head->previous = node;
     }
+
     cache->head = node;
 
     if (cache->tail == NULL)
@@ -187,11 +224,14 @@ static void insert_node_front(LRUCache *cache, CacheNode *node)
 {
     node->previous = NULL;
     node->next = cache->head;
+
     if (cache->head != NULL)
     {
         cache->head->previous = node;
     }
+
     cache->head = node;
+
     if (cache->tail == NULL)
     {
         cache->tail = node;
@@ -201,6 +241,7 @@ static void insert_node_front(LRUCache *cache, CacheNode *node)
 static CacheNode* remove_tail_node(LRUCache *cache)
 {
     CacheNode *removed = cache->tail;
+
     if (removed == NULL)
     {
         return NULL;
@@ -219,6 +260,7 @@ static CacheNode* remove_tail_node(LRUCache *cache)
 
     removed->previous = NULL;
     removed->next = NULL;
+
     return removed;
 }
 
@@ -239,6 +281,7 @@ LRUCache* lru_create(int capacity)
     cache->size = 0;
     cache->head = NULL;
     cache->tail = NULL;
+
     for (int bucket = 0; bucket < HASH_TABLE_BUCKETS; bucket++)
     {
         cache->buckets[bucket] = NULL;
@@ -254,7 +297,7 @@ char* lru_get(LRUCache *cache, int key)
         return NULL;
     }
 
-    HashEntry *entry = hash_find_entry(cache, key);
+    HashNode *entry = hash_find_entry(cache, key);
     if (entry == NULL)
     {
         return NULL;
@@ -272,15 +315,18 @@ void lru_put(LRUCache *cache, int key, const char *value)
         return;
     }
 
-    HashEntry *existing = hash_find_entry(cache, key);
+    HashNode *existing = hash_find_entry(cache, key);
+
     if (existing != NULL)
     {
         char *newCopy = string_duplicate(value);
+
         if (newCopy != NULL)
         {
             free(existing->node->value);
             existing->node->value = newCopy;
         }
+
         move_node_to_front(cache, existing->node);
         return;
     }
@@ -304,6 +350,7 @@ void lru_put(LRUCache *cache, int key, const char *value)
     if (cache->size > cache->capacity)
     {
         CacheNode *toRemove = remove_tail_node(cache);
+
         if (toRemove != NULL)
         {
             hash_remove_entry(cache, toRemove->key);
@@ -322,6 +369,7 @@ void lru_free(LRUCache *cache)
     }
 
     CacheNode *current = cache->head;
+
     while (current != NULL)
     {
         CacheNode *next = current->next;
@@ -332,10 +380,11 @@ void lru_free(LRUCache *cache)
 
     for (int bucket = 0; bucket < HASH_TABLE_BUCKETS; bucket++)
     {
-        HashEntry *entry = cache->buckets[bucket];
+        HashNode *entry = cache->buckets[bucket];
+
         while (entry != NULL)
         {
-            HashEntry *nextEntry = entry->next;
+            HashNode *nextEntry = entry->next;
             free(entry);
             entry = nextEntry;
         }
@@ -352,12 +401,14 @@ int main(void)
     while (fgets(line, sizeof(line), stdin) != NULL)
     {
         trim_whitespace(line);
+
         if (strlen(line) == 0)
         {
             continue;
         }
 
         char *command = strtok(line, " \t");
+
         if (command == NULL)
         {
             continue;
@@ -370,17 +421,22 @@ int main(void)
         else if (strcmp(command, "createCache") == 0)
         {
             char *capitalString = strtok(NULL, " \t");
+
             if (capitalString == NULL)
             {
                 fprintf(stderr, "createCache requires capacity\n");
                 continue;
             }
+
             int capacity = atoi(capitalString);
+
             if (cache != NULL)
             {
                 lru_free(cache);
             }
+
             cache = lru_create(capacity);
+
             if (cache == NULL)
             {
                 fprintf(stderr, "Failed to create cache\n");
@@ -389,37 +445,57 @@ int main(void)
         }
         else if (strcmp(command, "put") == 0)
         {
+            if (cache == NULL)
+            {
+                fprintf(stderr, "Cache not created. Use createCache <capacity>\n");
+                continue;
+            }
+
             char *keyString = strtok(NULL, " \t");
             char *valueRest = strtok(NULL, "");
+
             if (keyString == NULL || valueRest == NULL)
             {
                 fprintf(stderr, "put requires key and value\n");
                 continue;
             }
+
             trim_whitespace(valueRest);
-            if (cache == NULL)
+
+            if (!is_valid_int_string(keyString))
             {
-                fprintf(stderr, "Cache not created. Use createCache <capacity>\n");
+                fprintf(stderr, "incorrect key, key must be an integer\n");
                 continue;
             }
+
             int key = atoi(keyString);
             lru_put(cache, key, valueRest);
         }
         else if (strcmp(command, "get") == 0)
         {
-            char *keyStr = strtok(NULL, " \t");
-            if (keyStr == NULL)
-            {
-                fprintf(stderr, "get requires key\n");
-                continue;
-            }
             if (cache == NULL)
             {
                 fprintf(stderr, "Cache not created. Use createCache <capacity>\n");
                 continue;
             }
+
+            char *keyStr = strtok(NULL, " \t");
+
+            if (keyStr == NULL)
+            {
+                fprintf(stderr, "get requires key\n");
+                continue;
+            }
+
+            if (!is_valid_int_string(keyStr))
+            {
+                fprintf(stderr, "Incorrect key. Key must be an integer\n");
+                continue;
+            }
+
             int key = atoi(keyStr);
             char *value = lru_get(cache, key);
+
             if (value != NULL)
             {
                 printf("%s\n", value);
