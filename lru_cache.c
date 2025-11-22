@@ -4,7 +4,7 @@
 #include <ctype.h>
 
 #define MAX_LINE_LENGTH 2048
-#define HASH_TABLE_BUCKETS 2003
+#define HASH_TABLE_BUCKETS 1009
 
 typedef struct CacheNode
 {
@@ -429,6 +429,12 @@ int main(void)
             }
 
             int capacity = atoi(capitalString);
+
+            if (capacity < 1 || capacity > 1000)
+            {
+                fprintf(stderr, "Capacity must be between 1 and 1000\n");
+                continue;
+            }
 
             if (cache != NULL)
             {
