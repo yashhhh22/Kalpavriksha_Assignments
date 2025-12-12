@@ -1,630 +1,775 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdbool.h>
 
-#define MAP_CAPACITY 100
-#define LABEL_MAX 50
-#define BUFFER_MAX 100
-#define DIGIT_MAX 8
-#define NODE_COLLECTION_MAX 100
+#define MAX_PROCESS_TABLE_BUCKETS 1009
+#define MAX_PROCESS_NAME_LEN 64
+#define MAX_PROCESSES 1000
+#define MAX_KILL_EVENTS 1000
+#define MAX_INT_STR_LEN 16
 
 typedef enum
 {
-    PROCESS_NEW,
-    PROCESS_READY,
-    PROCESS_RUNNING,
-    PROCESS_WAITING,
-    PROCESS_DONE,
-    PROCESS_FORCE_STOPPED
-} ProcessState;
+    STATE_READY,
+    STATE_RUNNING,
+    STATE_WAITING,
+    STATE_TERMINATED
+} ProcessExecutionState;
 
-typedef struct ProcessNode
+typedef struct ProcessControlRecord
 {
-    int processIdentifier;
-    char processLabel[LABEL_MAX];
-    int startTick;
-    int cpuBurstTotal;
-    int cpuBurstRemaining;
-    int cpuBurstProgress;
-    int ioBeginAfterCpu;
-    int ioLength;
-    int ioProgress;
-    int ioRemaining;
-    int finishTick;
-    int ioJustStartedFlag;
-    struct ProcessNode *mapChain;
-    ProcessState processState;
-} ProcessNode;
+    char process_name[MAX_PROCESS_NAME_LEN];
+    int process_id;
+    int total_cpu_burst;
+    int remaining_cpu_burst;
+    int io_start_tick;
+    int io_duration_ticks;
+    int remaining_io_ticks;
+    int executed_cpu_time;
+    int completion_tick;
+    int configured_io_duration;
+    int terminated_by_kill;
+    int killed_at_tick;
+    ProcessExecutionState execution_state;
+    struct ProcessControlRecord *next_process;
+} ProcessControlRecord;
 
-typedef struct Node
+typedef struct ProcessLinkedQueue
 {
-    ProcessNode *process;
-    struct Node *next;
-} Node;
+    ProcessControlRecord *front_process;
+    ProcessControlRecord *rear_process;
+} ProcessLinkedQueue;
 
-typedef struct Queue
+typedef struct ProcessHashEntry
 {
-    Node *head;
-    Node *tail;
-    int length;
-} Queue;
+    int process_id_key;
+    ProcessControlRecord *process_record;
+    struct ProcessHashEntry *next_entry;
+} ProcessHashEntry;
 
-typedef struct KillEventNode
+typedef struct KillEventRecord
 {
-    int targetJobId;
-    int killTick;
-    struct KillEventNode *next;
-} KillEventNode;
+    int kill_pid;
+    int kill_time;
+} KillEventRecord;
 
-static ProcessNode *processMap[MAP_CAPACITY];
-static KillEventNode *killEventHead = NULL;
-static bool hadKillEvents = false;
-
-void init_queue(Queue *queue);
-void init_process_map();
-void enqueue_job(Queue *queue, ProcessNode *process);
-ProcessNode *dequeue_job(Queue *queue);
-int map_hash(int processId);
-void map_insert(ProcessNode *process);
-ProcessNode *map_lookup(int processId);
-ProcessNode *build_process_node(char *label, int id, int burst, int ioStart, int ioLen);
-int remove_process_from_queue(Queue *queue, int processId);
-void append_kill_event(int processId, int tick);
-void read_process_input(int totalProcesses, Queue *ready);
-void read_kill_events_input(int totalKills);
-bool line_nonempty(char buffer[BUFFER_MAX]);
-bool name_valid(char label[LABEL_MAX]);
-bool digits_only(char digits[DIGIT_MAX]);
-bool dash_or_digits(char *token);
-void apply_kill_events(int clockTick, Queue *ready, Queue *waiting, Queue *finished, ProcessNode **current);
-void progress_io_for_waiting(Queue *waiting, Queue *ready);
-void run_scheduler(Queue *ready, Queue *waiting, Queue *finished);
-void emit_report(Queue *finished);
-void free_map_entries();
-
-int main()
+typedef struct RawProcessLine
 {
-    int total_processes = 0;
-    int total_kills = 0;
-    init_process_map();
+    char raw_name[MAX_PROCESS_NAME_LEN];
+    char raw_pid_str[MAX_INT_STR_LEN];
+    char raw_burst_str[MAX_INT_STR_LEN];
+    char raw_io_start_str[MAX_INT_STR_LEN];
+    char raw_io_duration_str[MAX_INT_STR_LEN];
+} RawProcessLine;
 
-    Queue ready_line;
-    Queue waiting_line;
-    Queue finished_line;
+typedef struct ProcessSpecification
+{
+    char spec_name[MAX_PROCESS_NAME_LEN];
+    int spec_pid;
+    int spec_burst;
+    int spec_io_start;
+    int spec_io_duration;
+} ProcessSpecification;
 
-    init_queue(&ready_line);
-    init_queue(&waiting_line);
-    init_queue(&finished_line);
+static ProcessHashEntry *process_table[MAX_PROCESS_TABLE_BUCKETS];
+static ProcessLinkedQueue ready_queue;
+static ProcessLinkedQueue waiting_queue;
+static ProcessLinkedQueue finished_queue;
+static ProcessControlRecord *registered_processes[MAX_PROCESSES];
+static KillEventRecord kill_event_list[MAX_KILL_EVENTS];
+static int registered_process_count = 0;
+static int kill_event_count = 0;
+static int total_process_count = 0;
 
-    if (scanf("%d", &total_processes) != 1)
-    {
-        return 1;
-    }
-    getchar();
-    read_process_input(total_processes, &ready_line);
+int compute_bucket_index(int key);
+void process_table_insert(int key, ProcessControlRecord *process_record);
+ProcessControlRecord *process_table_lookup(int key);
+void init_queue(ProcessLinkedQueue *queue);
+void enqueue(ProcessLinkedQueue *queue, ProcessControlRecord *process_record);
+ProcessControlRecord *dequeue(ProcessLinkedQueue *queue);
+ProcessControlRecord *remove_from_queue_by_pid(ProcessLinkedQueue *queue, int process_id);
+void queue_for_each(ProcessLinkedQueue *queue, void (*operation)(ProcessControlRecord *));
+ProcessControlRecord *create_process_record(const ProcessSpecification *process_spec);
+void trim_string(char *input_string);
+bool is_valid_process_name(const char name[MAX_PROCESS_NAME_LEN]);
+bool is_valid_integer_string(const char num_string[MAX_INT_STR_LEN]);
+bool is_dash_or_integer(const char value[MAX_INT_STR_LEN]);
+bool validate_raw_input(const RawProcessLine *raw_input);
+bool is_valid_kill_input(const char pid_str[MAX_INT_STR_LEN], const char time_string[MAX_INT_STR_LEN]);
+void parse_input_line(char *line);
+void decrement_io_for_process(ProcessControlRecord *process_record);
+void move_completed_io_to_ready();
+void mark_process_terminated(ProcessControlRecord *process_record, int current_time);
+void apply_pending_kill_events(int current_time, ProcessControlRecord **running_process_pointer, int *terminated_counter_pointer);
+void execute_scheduler();
+int compare_process_by_pid(const void *left_pointer, const void *right_pointer);
+void print_result_table();
+void read_kill_events_after_process_input();
 
-    if (scanf("%d", &total_kills) != 1)
-    {
-        return 1;
-    }
-    getchar();
-    read_kill_events_input(total_kills);
-
-    run_scheduler(&ready_line, &waiting_line, &finished_line);
-    emit_report(&finished_line);
-
-    free_map_entries();
-    return 0;
+int compute_bucket_index(int key)
+{
+    int computed_index = key % MAX_PROCESS_TABLE_BUCKETS;
+    return (computed_index < 0 ? computed_index + MAX_PROCESS_TABLE_BUCKETS : computed_index);
 }
 
-bool line_nonempty(char buffer[BUFFER_MAX])
+void process_table_insert(int key, ProcessControlRecord *process_record)
 {
-    if (buffer[0] == '\0')
+    int bucket_index = compute_bucket_index(key);
+    ProcessHashEntry *entry_pointer = process_table[bucket_index];
+
+    while (entry_pointer)
     {
-        return false;
+        if (entry_pointer->process_id_key == key)
+        {
+            return;
+        }
+        entry_pointer = entry_pointer->next_entry;
     }
-    return true;
+
+    ProcessHashEntry *new_entry = (ProcessHashEntry *)malloc(sizeof(ProcessHashEntry));
+    new_entry->process_id_key = key;
+    new_entry->process_record = process_record;
+    new_entry->next_entry = process_table[bucket_index];
+    process_table[bucket_index] = new_entry;
 }
 
-void read_process_input(int totalProcesses, Queue *ready)
+ProcessControlRecord *process_table_lookup(int key)
 {
-    int read_count = 0;
-    while (read_count < totalProcesses)
-    {
-        char input_line[BUFFER_MAX];
-        if (fgets(input_line, sizeof(input_line), stdin) == NULL)
-        {
-            continue;
-        }
-        if (!line_nonempty(input_line))
-        {
-            continue;
-        }
-        char label[LABEL_MAX];
-        char idToken[DIGIT_MAX];
-        char burstToken[DIGIT_MAX];
-        char ioStartToken[DIGIT_MAX];
-        char ioLenToken[DIGIT_MAX];
+    int bucket_index = compute_bucket_index(key);
+    ProcessHashEntry *entry_pointer = process_table[bucket_index];
 
-        int fields = sscanf(input_line, "%s %s %s %s %s", label, idToken, burstToken, ioStartToken, ioLenToken);
-        if (fields != 5)
+    while (entry_pointer)
+    {
+        if (entry_pointer->process_id_key == key)
         {
-            continue;
+            return entry_pointer->process_record;
         }
-        if (!name_valid(label))
-        {
-            continue;
-        }
-        if (!digits_only(idToken) || !digits_only(burstToken))
-        {
-            continue;
-        }
-        if (!dash_or_digits(ioStartToken) || !dash_or_digits(ioLenToken))
-        {
-            continue;
-        }
-        int id = atoi(idToken);
-        int cpu = atoi(burstToken);
-        int ioStart = 0;
-        int ioLen = 0;
-        if (strcmp(ioStartToken, "-") != 0)
-        {
-            ioStart = atoi(ioStartToken);
-        }
-        if (strcmp(ioLenToken, "-") != 0)
-        {
-            ioLen = atoi(ioLenToken);
-        }
-        ProcessNode *process = build_process_node(label, id, cpu, ioStart, ioLen);
-        process->processState = PROCESS_READY;
-        process->cpuBurstRemaining = cpu;
-        map_insert(process);
-        enqueue_job(ready, process);
-        read_count++;
+        entry_pointer = entry_pointer->next_entry;
     }
-}
 
-void read_kill_events_input(int totalKills)
-{
-    int read_kill = 0;
-    if (totalKills > 0)
-    {
-        hadKillEvents = true;
-    }
-    while (read_kill < totalKills)
-    {
-        char input_line[BUFFER_MAX];
-        if (fgets(input_line, sizeof(input_line), stdin) == NULL)
-        {
-            continue;
-        }
-        if (!line_nonempty(input_line))
-        {
-            continue;
-        }
-        char idToken[DIGIT_MAX];
-        char timeToken[DIGIT_MAX];
-        char verb[8];
-        int fields = sscanf(input_line, "%7s %7s %7s", verb, idToken, timeToken);
-        if (fields != 3)
-        {
-            continue;
-        }
-        for (int index = 0; verb[index]; index++)
-        {
-            verb[index] = tolower((unsigned char) verb[index]);
-        }
-        if (strcmp(verb, "kill") != 0)
-        {
-            continue;
-        }
-        if (!digits_only(idToken) || !digits_only(timeToken))
-        {
-            continue;
-        }
-        int killId = atoi(idToken);
-        int killTime = atoi(timeToken);
-        append_kill_event(killId, killTime);
-        read_kill++;
-    }
-}
-
-bool dash_or_digits(char *token)
-{
-    if (strcmp(token, "-") == 0)
-    {
-        return true;
-    }
-    return digits_only(token);
-}
-
-bool name_valid(char label[LABEL_MAX])
-{
-    int index = 0;
-    while (label[index] == ' ')
-    {
-        index++;
-    }
-    if (label[index] == '\0')
-    {
-        return false;
-    }
-    return true;
-}
-
-bool digits_only(char digits[DIGIT_MAX])
-{
-    int index = 0;
-    if (digits[0] == '\0')
-    {
-        return false;
-    }
-    while (digits[index] != '\0')
-    {
-        if (!isdigit((unsigned char) digits[index]))
-        {
-            return false;
-        }
-        index++;
-    }
-    return true;
-}
-
-void init_queue(Queue *queue)
-{
-    queue->head = NULL;
-    queue->tail = NULL;
-    queue->length = 0;
-}
-
-void init_process_map()
-{
-    for (int index = 0; index < MAP_CAPACITY; index++)
-    {
-        processMap[index] = NULL;
-    }
-}
-
-void enqueue_job(Queue *queue, ProcessNode *process)
-{
-    Node *newNode = malloc(sizeof(Node));
-    newNode->process = process;
-    newNode->next = NULL;
-    if (queue->tail == NULL)
-    {
-        queue->head = newNode;
-        queue->tail = newNode;
-    }
-    else
-    {
-        queue->tail->next = newNode;
-        queue->tail = newNode;
-    }
-    queue->length++;
-}
-
-ProcessNode *dequeue_job(Queue *queue)
-{
-    if (queue->head == NULL)
-    {
-        return NULL;
-    }
-    Node *newNode = queue->head;
-    ProcessNode *process = newNode->process;
-    queue->head = newNode->next;
-    if (queue->head == NULL)
-    {
-        queue->tail = NULL;
-    }
-    free(newNode);
-    queue->length--;
-    return process;
-}
-
-int remove_process_from_queue(Queue *queue, int processId)
-{
-    Node *currentNode = queue->head;
-    Node *previousNode = NULL;
-    while (currentNode != NULL)
-    {
-        if (currentNode->process->processIdentifier == processId)
-        {
-            if (previousNode == NULL)
-            {
-                queue->head = currentNode->next;
-            }
-            else
-            {
-                previousNode->next = currentNode->next;
-            }
-            if (currentNode == queue->tail)
-            {
-                queue->tail = previousNode;
-            }
-            free(currentNode);
-            queue->length--;
-            return 1;
-        }
-        previousNode = currentNode;
-        currentNode = currentNode->next;
-    }
-    return 0;
-}
-
-int map_hash(int processId)
-{
-    int index = processId % MAP_CAPACITY;
-    if (index < 0)
-    {
-        index += MAP_CAPACITY;
-    }
-    return index;
-}
-
-void map_insert(ProcessNode *process)
-{
-    int bucket = map_hash(process->processIdentifier);
-    process->mapChain = processMap[bucket];
-    processMap[bucket] = process;
-}
-
-ProcessNode *map_lookup(int processId)
-{
-    int bucket = map_hash(processId);
-    ProcessNode *currentNode = processMap[bucket];
-    while (currentNode != NULL)
-    {
-        if (currentNode->processIdentifier == processId)
-        {
-            return currentNode;
-        }
-        currentNode = currentNode->mapChain;
-    }
     return NULL;
 }
 
-ProcessNode *build_process_node(char *label, int id, int burst, int ioStart, int ioLen)
+void init_queue(ProcessLinkedQueue *queue)
 {
-    ProcessNode *node = malloc(sizeof(ProcessNode));
-    node->processIdentifier = id;
-    strncpy(node->processLabel, label, LABEL_MAX - 1);
-    node->processLabel[LABEL_MAX - 1] = '\0';
-    node->startTick = 0;
-    node->cpuBurstTotal = burst;
-    node->cpuBurstRemaining = burst;
-    node->cpuBurstProgress = 0;
-    node->ioBeginAfterCpu = ioStart;
-    node->ioLength = ioLen;
-    node->ioProgress = 0;
-    node->ioRemaining = 0;
-    node->finishTick = 0;
-    node->ioJustStartedFlag = 0;
-    node->mapChain = NULL;
-    node->processState = PROCESS_NEW;
-
-    return node;
+    queue->front_process = queue->rear_process = NULL;
 }
 
-void append_kill_event(int processId, int tick)
+void enqueue(ProcessLinkedQueue *queue, ProcessControlRecord *process_record)
 {
-    KillEventNode *node = malloc(sizeof(KillEventNode));
-    node->targetJobId = processId;
-    node->killTick = tick;
-    node->next = NULL;
-    if (killEventHead == NULL)
+    process_record->next_process = NULL;
+
+    if (queue->rear_process)
     {
-        killEventHead = node;
+        queue->rear_process->next_process = process_record;
+        queue->rear_process = process_record;
     }
     else
     {
-        KillEventNode *currentNode = killEventHead;
-        while (currentNode->next != NULL)
-        {
-            currentNode = currentNode->next;
-        }
-        currentNode->next = node;
+        queue->front_process = queue->rear_process = process_record;
     }
 }
 
-void apply_kill_events(int clockTick, Queue *ready, Queue *waiting, Queue *finished, ProcessNode **current)
+ProcessControlRecord *dequeue(ProcessLinkedQueue *queue)
 {
-    KillEventNode *currentNode = killEventHead;
-    KillEventNode *previousNode = NULL;
-    while (currentNode != NULL)
+    if (!queue->front_process)
     {
-        if (currentNode->killTick == clockTick)
+        return NULL;
+    }
+
+    ProcessControlRecord *process_record = queue->front_process;
+    queue->front_process = process_record->next_process;
+
+    if (!queue->front_process)
+    {
+        queue->rear_process = NULL;
+    }
+
+    return process_record;
+}
+
+ProcessControlRecord *remove_from_queue_by_pid(ProcessLinkedQueue *queue, int process_id)
+{
+    ProcessControlRecord *current_process = queue->front_process;
+    ProcessControlRecord *previous_process = NULL;
+
+    while (current_process)
+    {
+        if (current_process->process_id == process_id)
         {
-            ProcessNode * target = map_lookup(currentNode->targetJobId);
-            if ((target != NULL) && (target->processState != PROCESS_DONE) && (target->processState != PROCESS_FORCE_STOPPED))
+            if (previous_process)
             {
-                target->processState = PROCESS_FORCE_STOPPED;
-                target->finishTick = clockTick;
-                remove_process_from_queue(ready, target->processIdentifier);
-                remove_process_from_queue(waiting, target->processIdentifier);
-                if ((*current != NULL) && ((*current)->processIdentifier == currentNode->targetJobId))
-                {
-                    *current = NULL;
-                }
-                enqueue_job(finished, target);
-            }
-            if (previousNode == NULL)
-            {
-                killEventHead = currentNode->next;
-                free(currentNode);
-                currentNode = killEventHead;
+                previous_process->next_process = current_process->next_process;
             }
             else
             {
-                previousNode->next = currentNode->next;
-                free(currentNode);
-                currentNode = previousNode->next;
+                queue->front_process = current_process->next_process;
             }
-            continue;
+
+            if (current_process == queue->rear_process)
+            {
+                queue->rear_process = previous_process;
+            }
+
+            current_process->next_process = NULL;
+            return current_process;
         }
-        previousNode = currentNode;
-        currentNode = currentNode->next;
+
+        previous_process = current_process;
+        current_process = current_process->next_process;
+    }
+
+    return NULL;
+}
+
+void queue_for_each(ProcessLinkedQueue *queue, void (*operation)(ProcessControlRecord *))
+{
+    ProcessControlRecord *current_process = queue->front_process;
+
+    while (current_process)
+    {
+        ProcessControlRecord *next_process = current_process->next_process;
+        operation(current_process);
+        current_process = next_process;
     }
 }
 
-void progress_io_for_waiting(Queue *waiting, Queue *ready)
+ProcessControlRecord *create_process_record(const ProcessSpecification *process_spec)
 {
-    Node *currentNode = waiting->head;
-    Node *previousNode = NULL;
-    while (currentNode != NULL)
+    ProcessControlRecord *process_record = (ProcessControlRecord *)malloc(sizeof(ProcessControlRecord));
+    strcpy(process_record->process_name, process_spec->spec_name);
+    process_record->process_id = process_spec->spec_pid;
+    process_record->total_cpu_burst = process_spec->spec_burst;
+    process_record->remaining_cpu_burst = process_spec->spec_burst;
+    process_record->io_start_tick = process_spec->spec_io_start;
+    process_record->io_duration_ticks = process_spec->spec_io_duration;
+    process_record->remaining_io_ticks = 0;
+    process_record->configured_io_duration = process_spec->spec_io_duration;
+    process_record->executed_cpu_time = 0;
+    process_record->completion_tick = -1;
+    process_record->terminated_by_kill = 0;
+    process_record->killed_at_tick = -1;
+    process_record->execution_state = STATE_READY;
+    process_record->next_process = NULL;
+    return process_record;
+}
+
+void trim_string(char *input_string)
+{
+    int start_index = 0;
+    int write_index = 0;
+
+    while (isspace((unsigned char)input_string[start_index]))
     {
-        ProcessNode *temporaryProcess = currentNode->process;
-        if (temporaryProcess->ioJustStartedFlag)
-        {
-            temporaryProcess->ioJustStartedFlag = 0;
-            previousNode = currentNode;
-            currentNode = currentNode->next;
-            continue;
-        }
-        temporaryProcess->ioProgress++;
-        temporaryProcess->ioRemaining--;
-        if (temporaryProcess->ioRemaining <= 0)
-        {
-            temporaryProcess->processState = PROCESS_READY;
-            temporaryProcess->cpuBurstRemaining = temporaryProcess->cpuBurstTotal - temporaryProcess->cpuBurstProgress;
-            enqueue_job(ready, temporaryProcess);
-            if (previousNode == NULL)
-            {
-                waiting->head = currentNode->next;
-            }
-            else
-            {
-                previousNode->next = currentNode->next;
-            }
-            if (currentNode == waiting->tail)
-            {
-                waiting->tail = previousNode;
-            }
-            Node *nodeToFree = currentNode;
-            currentNode = currentNode->next;
-            free(nodeToFree);
-            waiting->length--;
-            continue;
-        }
-        previousNode = currentNode;
-        currentNode = currentNode->next;
+        start_index++;
+    }
+
+    while (input_string[start_index])
+    {
+        input_string[write_index++] = input_string[start_index++];
+    }
+
+    input_string[write_index] = '\0';
+
+    while (write_index > 0 && isspace((unsigned char)input_string[write_index - 1]))
+    {
+        input_string[--write_index] = '\0';
     }
 }
 
-void run_scheduler(Queue *ready, Queue *waiting, Queue *finished)
+bool is_valid_process_name(const char name[MAX_PROCESS_NAME_LEN])
 {
-    int clock = 0;
-    ProcessNode *runningProcess = NULL;
-    while (ready->length > 0 || waiting->length > 0 || runningProcess != NULL)
+    int name_index = 0;
+
+    while (name[name_index] == ' ')
     {
-        apply_kill_events(clock, ready, waiting, finished, &runningProcess);
-        if (runningProcess == NULL && ready->length > 0)
-        {
-            runningProcess = dequeue_job(ready);
-            if (runningProcess != NULL)
-            {
-                runningProcess->processState = PROCESS_RUNNING;
-            }
-        }
-        if (runningProcess != NULL)
-        {
-            runningProcess->cpuBurstProgress++;
-            runningProcess->cpuBurstRemaining--;
-            if (runningProcess->cpuBurstProgress == runningProcess->ioBeginAfterCpu && runningProcess->ioLength > 0)
-            {
-                runningProcess->processState = PROCESS_WAITING;
-                runningProcess->ioRemaining = runningProcess->ioLength;
-                runningProcess->ioProgress = 0;
-                runningProcess->ioJustStartedFlag = 1;
-                enqueue_job(waiting, runningProcess);
-                runningProcess = NULL;
-            }
-            else if (runningProcess->cpuBurstRemaining <= 0)
-            {
-                runningProcess->finishTick = clock + 1;
-                runningProcess->processState = PROCESS_DONE;
-                enqueue_job(finished, runningProcess);
-                runningProcess = NULL;
-            }
-        }
-        progress_io_for_waiting(waiting, ready);
-        clock++;
+        name_index++;
     }
+
+    if (name[name_index] == '\0')
+    {
+        printf("Process name can't be empty.\n");
+        return false;
+    }
+
+    return true;
 }
 
-void emit_report(Queue *finished)
+bool is_valid_integer_string(const char number_string[MAX_INT_STR_LEN])
 {
-    ProcessNode *collected[NODE_COLLECTION_MAX];
-    int total = 0;
-    Node *currentNode = finished->head;
-    while (currentNode != NULL && total < NODE_COLLECTION_MAX)
+    int char_index = 0;
+
+    if (number_string[0] == '\0')
     {
-        collected[total++] = currentNode->process;
-        currentNode = currentNode->next;
+        return false;
     }
-    for (int index = 0; index < total - 1; index++)
+
+    while (number_string[char_index] != '\0')
     {
-        for (int nextIndex = index + 1; nextIndex < total; nextIndex++)
+        if (!isdigit((unsigned char)number_string[char_index]))
         {
-            if (collected[index]->processIdentifier > collected[nextIndex]->processIdentifier)
-            {
-                ProcessNode *swappingValue = collected[index];
-                collected[index] = collected[nextIndex];
-                collected[nextIndex] = swappingValue;
-            }
+            return false;
         }
+        char_index++;
     }
-    if (hadKillEvents)
+
+    return true;
+}
+
+bool is_dash_or_integer(const char value[MAX_INT_STR_LEN])
+{
+    if (strcmp(value, "-") == 0)
     {
-        printf("%-5s %-12s %-5s %-5s %-12s %-8s\n", "PID", "Name", "CPU", "IO", "Turnaround", "Waiting");
+        return true;
+    }
+    return is_valid_integer_string(value);
+}
+
+bool validate_raw_input(const RawProcessLine *raw_input)
+{
+    if (!is_valid_process_name(raw_input->raw_name))
+    {
+        return false;
+    }
+
+    if (!is_valid_integer_string(raw_input->raw_pid_str))
+    {
+        printf("Invalid input. Process ID must be an integer.\n");
+        return false;
+    }
+
+    if (!is_valid_integer_string(raw_input->raw_burst_str))
+    {
+        printf("Invalid input. Burst must be an integer.\n");
+        return false;
+    }
+
+    if (!is_dash_or_integer(raw_input->raw_io_start_str))
+    {
+        printf("Invalid input. I/O start must be integer or '-'.\n");
+        return false;
+    }
+
+    if (!is_dash_or_integer(raw_input->raw_io_duration_str))
+    {
+        printf("Invalid input. I/O duration must be integer or '-'.\n");
+        return false;
+    }
+
+    int pid_value = atoi(raw_input->raw_pid_str);
+
+    if (process_table_lookup(pid_value))
+    {
+        printf("Duplicate PID %d detected.\n", pid_value);
+        return false;
+    }
+
+    return true;
+}
+
+bool is_valid_kill_input(const char pid_str[MAX_INT_STR_LEN], const char time_string[MAX_INT_STR_LEN])
+{
+    if (!is_valid_integer_string(pid_str))
+    {
+        printf("Invalid input. Kill PID must be an integer.\n");
+        return false;
+    }
+
+    if (!is_valid_integer_string(time_string))
+    {
+        printf("Invalid input. Kill time must be an integer.\n");
+        return false;
+    }
+
+    return true;
+}
+
+void parse_input_line(char *line)
+{
+    char first_word[16];
+    sscanf(line, "%s", first_word);
+
+    if (strcasecmp(first_word, "KILL") == 0)
+    {
+        char kill_pid_str[MAX_INT_STR_LEN];
+        char kill_time_str[MAX_INT_STR_LEN];
+        sscanf(line + strlen(first_word), "%s %s", kill_pid_str, kill_time_str);
+
+        if (!is_valid_kill_input(kill_pid_str, kill_time_str))
+        {
+            return;
+        }
+
+        int pid_value = atoi(kill_pid_str);
+        int time_value = atoi(kill_time_str);
+        kill_event_list[kill_event_count].kill_pid = pid_value;
+        kill_event_list[kill_event_count].kill_time = time_value;
+        kill_event_count++;
+        return;
+    }
+
+    RawProcessLine raw_input;
+    memset(&raw_input, 0, sizeof(raw_input));
+
+    char io_start_buffer[MAX_INT_STR_LEN];
+    char io_duration_buffer[MAX_INT_STR_LEN];
+    char pid_buffer[MAX_INT_STR_LEN];
+    char burst_buffer[MAX_INT_STR_LEN];
+    char name_buffer[MAX_PROCESS_NAME_LEN];
+
+    int parsed_items = sscanf(line, "%63s %15s %15s %15s %15s", name_buffer, pid_buffer, burst_buffer, io_start_buffer, io_duration_buffer);
+
+    if (parsed_items < 3)
+    {
+        return;
+    }
+
+    strncpy(raw_input.raw_name, name_buffer, MAX_PROCESS_NAME_LEN - 1);
+    strncpy(raw_input.raw_pid_str, pid_buffer, MAX_INT_STR_LEN - 1);
+    strncpy(raw_input.raw_burst_str, burst_buffer, MAX_INT_STR_LEN - 1);
+
+    if (parsed_items >= 4)
+    {
+        strncpy(raw_input.raw_io_start_str, io_start_buffer, MAX_INT_STR_LEN - 1);
     }
     else
     {
-        printf("%-5s %-12s %-5s %-5s %-12s %-8s\n", "PID", "Name", "CPU", "IO", "Turnaround", "Waiting");
+        strncpy(raw_input.raw_io_start_str, "-", MAX_INT_STR_LEN - 1);
     }
-    for (int index = 0; index < total; index++)
+
+    if (parsed_items >= 5)
     {
-        ProcessNode *node = collected[index];
-        int cpu = node->cpuBurstTotal;
-        int io = node->ioLength;
-        if (node->processState == PROCESS_FORCE_STOPPED)
+        strncpy(raw_input.raw_io_duration_str, io_duration_buffer, MAX_INT_STR_LEN - 1);
+    }
+    else
+    {
+        strncpy(raw_input.raw_io_duration_str, "-", MAX_INT_STR_LEN - 1);
+    }
+
+    if (!validate_raw_input(&raw_input))
+    {
+        return;
+    }
+
+    ProcessSpecification process_specification;
+    memset(&process_specification, 0, sizeof(process_specification));
+    strncpy(process_specification.spec_name, raw_input.raw_name, MAX_PROCESS_NAME_LEN - 1);
+
+    process_specification.spec_pid = atoi(raw_input.raw_pid_str);
+    process_specification.spec_burst = atoi(raw_input.raw_burst_str);
+    process_specification.spec_io_start = (strcmp(raw_input.raw_io_start_str, "-") != 0) ? atoi(raw_input.raw_io_start_str) : -1;
+    process_specification.spec_io_duration = (strcmp(raw_input.raw_io_duration_str, "-") != 0) ? atoi(raw_input.raw_io_duration_str) : 0;
+
+    ProcessControlRecord *new_process_record = create_process_record(&process_specification);
+    registered_processes[registered_process_count++] = new_process_record;
+    total_process_count++;
+    process_table_insert(process_specification.spec_pid, new_process_record);
+    enqueue(&ready_queue, new_process_record);
+}
+
+void decrement_io_for_process(ProcessControlRecord *process_record)
+{
+    if (process_record->remaining_io_ticks > 0)
+    {
+        process_record->remaining_io_ticks--;
+    }
+}
+
+void move_completed_io_to_ready()
+{
+    ProcessControlRecord *previous_process = NULL;
+    ProcessControlRecord *current_process = waiting_queue.front_process;
+
+    while (current_process)
+    {
+        ProcessControlRecord *next_process = current_process->next_process;
+
+        if (current_process->remaining_io_ticks == 0)
         {
-            int turnaround = 0;
-            int waiting = 0;
-            printf("%-5d %-12s %-5d %-5d %-12d %-8d\n", node->processIdentifier, node->processLabel, cpu, io, turnaround, waiting);
+            if (previous_process)
+            {
+                previous_process->next_process = current_process->next_process;
+            }
+            else
+            {
+                waiting_queue.front_process = current_process->next_process;
+            }
+
+            if (current_process == waiting_queue.rear_process)
+            {
+                waiting_queue.rear_process = previous_process;
+            }
+
+            current_process->execution_state = STATE_READY;
+            enqueue(&ready_queue, current_process);
         }
         else
         {
-            int turnaround = node->finishTick - node->startTick;
-            int waiting = turnaround - cpu;
-            if (waiting < 0)
+            previous_process = current_process;
+        }
+
+        current_process = next_process;
+    }
+}
+
+void mark_process_terminated(ProcessControlRecord *process_record, int current_time)
+{
+    process_record->execution_state = STATE_TERMINATED;
+    process_record->completion_tick = current_time;
+    enqueue(&finished_queue, process_record);
+}
+
+void apply_pending_kill_events(int current_time, ProcessControlRecord **running_process_pointer, int *terminated_counter_pointer)
+{
+    for (int event_index = 0; event_index < kill_event_count; event_index++)
+    {
+        if (kill_event_list[event_index].kill_time == current_time)
+        {
+            int target_pid = kill_event_list[event_index].kill_pid;
+            ProcessControlRecord *target_process = process_table_lookup(target_pid);
+
+            if (!target_process || target_process->execution_state == STATE_TERMINATED)
             {
-                waiting = 0;
+                continue;
             }
-            printf("%-5d %-12s %-5d %-5d %-12d %-8d\n", node->processIdentifier, node->processLabel, cpu, io, turnaround, waiting);
+
+            if (*running_process_pointer && (*running_process_pointer)->process_id == target_pid)
+            {
+                ProcessControlRecord *process_to_kill = *running_process_pointer;
+                *running_process_pointer = NULL;
+                process_to_kill->terminated_by_kill = 1;
+                process_to_kill->killed_at_tick = current_time;
+                mark_process_terminated(process_to_kill, current_time);
+                (*terminated_counter_pointer)++;
+            }
+            else
+            {
+                ProcessControlRecord *process_from_ready = remove_from_queue_by_pid(&ready_queue, target_pid);
+
+                if (!process_from_ready)
+                {
+                    process_from_ready = remove_from_queue_by_pid(&waiting_queue, target_pid);
+                }
+
+                if (process_from_ready)
+                {
+                    process_from_ready->terminated_by_kill = 1;
+                    process_from_ready->killed_at_tick = current_time;
+                    mark_process_terminated(process_from_ready, current_time);
+                    (*terminated_counter_pointer)++;
+                }
+            }
         }
     }
 }
 
-void free_map_entries()
+void execute_scheduler()
 {
-    for (int index = 0; index < MAP_CAPACITY; index++)
+    int time_tick = 0;
+    int terminated_counter = 0;
+    ProcessControlRecord *running_process = NULL;
+
+    while (terminated_counter < total_process_count)
     {
-        ProcessNode *currentNode = processMap[index];
-        while (currentNode != NULL)
+        apply_pending_kill_events(time_tick, &running_process, &terminated_counter);
+
+        if (!running_process)
         {
-            ProcessNode *next = currentNode->mapChain;
-            free(currentNode);
-            currentNode = next;
+            running_process = dequeue(&ready_queue);
+
+            if (running_process)
+            {
+                running_process->execution_state = STATE_RUNNING;
+            }
         }
-        processMap[index] = NULL;
+
+        if (running_process)
+        {
+            running_process->executed_cpu_time++;
+            running_process->remaining_cpu_burst--;
+        }
+
+        queue_for_each(&waiting_queue, decrement_io_for_process);
+
+        if (running_process)
+        {
+            if ((running_process->remaining_cpu_burst > 0) && 
+                (running_process->io_start_tick >= 0) && 
+                (running_process->executed_cpu_time == running_process->io_start_tick) && 
+                (running_process->io_duration_ticks > 0))
+            {
+                running_process->remaining_io_ticks = running_process->io_duration_ticks;
+                running_process->execution_state = STATE_WAITING;
+                enqueue(&waiting_queue, running_process);
+                running_process = NULL;
+            }
+            else if (running_process->remaining_cpu_burst == 0)
+            {
+                mark_process_terminated(running_process, time_tick + 1);
+                running_process = NULL;
+                terminated_counter++;
+            }
+        }
+
+        move_completed_io_to_ready();
+        time_tick++;
     }
-    KillEventNode *killEvent = killEventHead;
-    while (killEvent != NULL)
+}
+
+int compare_process_by_pid(const void *left_pointer, const void *right_pointer)
+{
+    ProcessControlRecord *first_process = *(ProcessControlRecord **)left_pointer;
+    ProcessControlRecord *second_process = *(ProcessControlRecord **)right_pointer;
+    return first_process->process_id - second_process->process_id;
+}
+
+void print_result_table()
+{
+    ProcessControlRecord *sorted_list[MAX_PROCESSES];
+    int any_killed = 0;
+
+    for (int registry_index = 0; registry_index < registered_process_count; registry_index++)
     {
-        KillEventNode *nextEvent = killEvent->next;
-        free(killEvent);
-        killEvent = nextEvent;
+        sorted_list[registry_index] = registered_processes[registry_index];
+        if (sorted_list[registry_index]->terminated_by_kill)
+        {
+            any_killed = 1;
+        }
     }
+
+    qsort(sorted_list, registered_process_count, sizeof(ProcessControlRecord *), compare_process_by_pid);
+
+    if (!any_killed)
+    {
+        printf("%-6s %-20s %-6s %-6s %-12s %-8s\n",
+               "PID", "Name", "CPU", "IO", "Turnaround", "Waiting");
+
+        for (int print_index = 0; print_index < registered_process_count; print_index++)
+        {
+            ProcessControlRecord *process_record = sorted_list[print_index];
+            int turnaround = process_record->completion_tick;
+            int waiting = turnaround - process_record->total_cpu_burst;
+            if (waiting < 0) waiting = 0;
+            printf("%-6d %-20s %-6d %-6d %-12d %-8d\n",
+                   process_record->process_id,
+                   process_record->process_name,
+                   process_record->total_cpu_burst,
+                   process_record->configured_io_duration,
+                   turnaround,
+                   waiting);
+        }
+    }
+    else
+    {
+        printf("%-6s %-20s %-6s %-6s %-18s %-12s %-8s\n",
+               "PID", "Name", "CPU", "IO", "Status", "Turnaround", "Waiting");
+
+        for (int print_index = 0; print_index < registered_process_count; print_index++)
+        {
+            ProcessControlRecord *process_record = sorted_list[print_index];
+
+            if (process_record->terminated_by_kill)
+            {
+                char status_text[32];
+                snprintf(status_text, sizeof(status_text), "KILLED at %d", process_record->killed_at_tick);
+                printf("%-6d %-20s %-6d %-6d %-18s %-12s %-8s\n",
+                       process_record->process_id,
+                       process_record->process_name,
+                       process_record->total_cpu_burst,
+                       process_record->configured_io_duration,
+                       status_text,
+                       "-",
+                       "-");
+            }
+            else
+            {
+                int turnaround = process_record->completion_tick;
+                int waiting = turnaround - process_record->total_cpu_burst;
+                if (waiting < 0) waiting = 0;
+                printf("%-6d %-20s %-6d %-6d %-18s %-12d %-8d\n",
+                       process_record->process_id,
+                       process_record->process_name,
+                       process_record->total_cpu_burst,
+                       process_record->configured_io_duration,
+                       "OK",
+                       turnaround,
+                       waiting);
+            }
+        }
+    }
+}
+
+void read_kill_events_after_process_input()
+{
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), stdin))
+    {
+        trim_string(buffer);
+        if (strlen(buffer) == 0)
+        {
+            break;
+        }
+        char verb_buffer[16];
+        char pid_string[MAX_INT_STR_LEN];
+        char time_string[MAX_INT_STR_LEN];
+        int fields_read = sscanf(buffer, "%15s %15s %15s", verb_buffer, pid_string, time_string);
+        if (fields_read != 3)
+        {
+            continue;
+        }
+        for (int char_index = 0; verb_buffer[char_index]; char_index++)
+        {
+            verb_buffer[char_index] = (char) tolower((unsigned char)verb_buffer[char_index]);
+        }
+        if (strcmp(verb_buffer, "kill") != 0)
+        {
+            continue;
+        }
+        if (!is_valid_kill_input(pid_string, time_string))
+        {
+            continue;
+        }
+        int pid_value = atoi(pid_string);
+        int time_value = atoi(time_string);
+        kill_event_list[kill_event_count].kill_pid = pid_value;
+        kill_event_list[kill_event_count].kill_time = time_value;
+        kill_event_count++;
+    }
+}
+
+int main()
+{
+    init_queue(&ready_queue);
+    init_queue(&waiting_queue);
+    init_queue(&finished_queue);
+
+    printf("Enter the input in the given format:\n");
+    printf("<process_name> <process_id>  <cpu_burst_time>  <io_start_time>  <io_duration_time>\n\n");
+
+    char input_line[256];
+
+    while (fgets(input_line, sizeof(input_line), stdin))
+    {
+        trim_string(input_line);
+
+        if (strlen(input_line) == 0)
+        {
+            read_kill_events_after_process_input();
+            break;
+        }
+
+        parse_input_line(input_line);
+    }
+
+    if (total_process_count == 0)
+    {
+        printf("No valid processes entered.\n");
+        return 0;
+    }
+
+    execute_scheduler();
+    print_result_table();
+    return 0;
 }
