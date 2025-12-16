@@ -102,11 +102,17 @@ void parse_input_line(char *line);
 void decrement_io_for_process(ProcessControlRecord *process_record);
 void move_completed_io_to_ready();
 void mark_process_terminated(ProcessControlRecord *process_record, int current_time);
+static void kill_running_process(ProcessControlRecord **running_process_pointer, int current_time, int *terminated_counter_pointer);
+static void kill_queued_process(int target_pid, int current_time, int *terminated_counter_pointer);
+static void handle_kill_event(int current_time, int target_pid, ProcessControlRecord **running_process_pointer,int *terminated_counter_pointer);
 void apply_pending_kill_events(int current_time, ProcessControlRecord **running_process_pointer, int *terminated_counter_pointer);
 void execute_scheduler();
 int compare_process_by_pid(const void *left_pointer, const void *right_pointer);
+void destroy_process_table();
+void destroy_process_records();
 void print_result_table();
 void read_kill_events_after_process_input();
+void cleanup_all_memory();
 
 int compute_bucket_index(int key)
 {
@@ -129,6 +135,11 @@ void process_table_insert(int key, ProcessControlRecord *process_record)
     }
 
     ProcessHashEntry *new_entry = (ProcessHashEntry *)malloc(sizeof(ProcessHashEntry));
+    if (new_entry == NULL) {
+        printf("Memory allocation failed!!!");
+        return;
+    }
+
     new_entry->process_id_key = key;
     new_entry->process_record = process_record;
     new_entry->next_entry = process_table[bucket_index];
@@ -239,6 +250,11 @@ void queue_for_each(ProcessLinkedQueue *queue, void (*operation)(ProcessControlR
 ProcessControlRecord *create_process_record(const ProcessSpecification *process_spec)
 {
     ProcessControlRecord *process_record = (ProcessControlRecord *)malloc(sizeof(ProcessControlRecord));
+    if (process_record == NULL) {
+        printf("Memory allocation failed!!!");
+        return NULL;
+    }
+
     strcpy(process_record->process_name, process_spec->spec_name);
     process_record->process_id = process_spec->spec_pid;
     process_record->total_cpu_burst = process_spec->spec_burst;
@@ -463,6 +479,10 @@ void parse_input_line(char *line)
     process_specification.spec_io_duration = (strcmp(raw_input.raw_io_duration_str, "-") != 0) ? atoi(raw_input.raw_io_duration_str) : 0;
 
     ProcessControlRecord *new_process_record = create_process_record(&process_specification);
+    if (new_process_record == NULL) {
+        return;
+    }
+
     registered_processes[registered_process_count++] = new_process_record;
     total_process_count++;
     process_table_insert(process_specification.spec_pid, new_process_record);
@@ -521,47 +541,68 @@ void mark_process_terminated(ProcessControlRecord *process_record, int current_t
     enqueue(&finished_queue, process_record);
 }
 
+static void kill_running_process(ProcessControlRecord **running_process_pointer, int current_time, int *terminated_counter_pointer)
+{
+    ProcessControlRecord *process_to_kill = *running_process_pointer;
+
+    *running_process_pointer = NULL;
+    process_to_kill->terminated_by_kill = 1;
+    process_to_kill->killed_at_tick = current_time;
+
+    mark_process_terminated(process_to_kill, current_time);
+    (*terminated_counter_pointer)++;
+}
+
+static void kill_queued_process(int target_pid, int current_time, int *terminated_counter_pointer)
+{
+    ProcessControlRecord *process_record = remove_from_queue_by_pid(&ready_queue, target_pid);
+
+    if (!process_record)
+    {
+        process_record = remove_from_queue_by_pid(&waiting_queue, target_pid);
+    }
+
+    if (!process_record)
+    {
+        return;
+    }
+
+    process_record->terminated_by_kill = 1;
+    process_record->killed_at_tick = current_time;
+
+    mark_process_terminated(process_record, current_time);
+    (*terminated_counter_pointer)++;
+}
+
+static void handle_kill_event(int current_time, int target_pid, ProcessControlRecord **running_process_pointer, int *terminated_counter_pointer)
+{
+    ProcessControlRecord *target_process = process_table_lookup(target_pid);
+
+    if (!target_process || target_process->execution_state == STATE_TERMINATED)
+    {
+        return;
+    }
+
+    if ((*running_process_pointer) && ((*running_process_pointer)->process_id == target_pid))
+    {
+        kill_running_process(running_process_pointer, current_time, terminated_counter_pointer);
+    }
+    else
+    {
+        kill_queued_process(target_pid, current_time, terminated_counter_pointer);
+    }
+}
+
 void apply_pending_kill_events(int current_time, ProcessControlRecord **running_process_pointer, int *terminated_counter_pointer)
 {
     for (int event_index = 0; event_index < kill_event_count; event_index++)
     {
-        if (kill_event_list[event_index].kill_time == current_time)
+        if (kill_event_list[event_index].kill_time != current_time)
         {
-            int target_pid = kill_event_list[event_index].kill_pid;
-            ProcessControlRecord *target_process = process_table_lookup(target_pid);
-
-            if (!target_process || target_process->execution_state == STATE_TERMINATED)
-            {
-                continue;
-            }
-
-            if (*running_process_pointer && (*running_process_pointer)->process_id == target_pid)
-            {
-                ProcessControlRecord *process_to_kill = *running_process_pointer;
-                *running_process_pointer = NULL;
-                process_to_kill->terminated_by_kill = 1;
-                process_to_kill->killed_at_tick = current_time;
-                mark_process_terminated(process_to_kill, current_time);
-                (*terminated_counter_pointer)++;
-            }
-            else
-            {
-                ProcessControlRecord *process_from_ready = remove_from_queue_by_pid(&ready_queue, target_pid);
-
-                if (!process_from_ready)
-                {
-                    process_from_ready = remove_from_queue_by_pid(&waiting_queue, target_pid);
-                }
-
-                if (process_from_ready)
-                {
-                    process_from_ready->terminated_by_kill = 1;
-                    process_from_ready->killed_at_tick = current_time;
-                    mark_process_terminated(process_from_ready, current_time);
-                    (*terminated_counter_pointer)++;
-                }
-            }
+            continue;
         }
+
+        handle_kill_event(current_time, kill_event_list[event_index].kill_pid, running_process_pointer, terminated_counter_pointer);
     }
 }
 
@@ -739,14 +780,45 @@ void read_kill_events_after_process_input()
     }
 }
 
+void destroy_process_table()
+{
+    for (int index = 0; index < MAX_PROCESS_TABLE_BUCKETS; index++)
+    {
+        ProcessHashEntry *current = process_table[index];
+        while (current)
+        {
+            ProcessHashEntry *temporaryNode = current;
+            current = current->next_entry;
+            free(temporaryNode);
+        }
+        process_table[index] = NULL;
+    }
+}
+
+void destroy_process_records()
+{
+    for (int index = 0; index < registered_process_count; index++)
+    {
+        free(registered_processes[index]);
+        registered_processes[index] = NULL;
+    }
+}
+
+void cleanup_all_memory()
+{
+    destroy_process_table();
+    destroy_process_records();
+    printf("Freeing up memory...Memory released!!!");
+}
+
 int main()
 {
     init_queue(&ready_queue);
     init_queue(&waiting_queue);
     init_queue(&finished_queue);
 
-    printf("Enter the input in the given format:\n");
-    printf("<process_name> <process_id>  <cpu_burst_time>  <io_start_time>  <io_duration_time>\n\n");
+    printf("Enter the input in the given format :\n");
+    printf("<process_name>  <process_id>  <cpu_burst_time>  <io_start_time>  <io_duration_time>\n\n");
 
     char input_line[256];
 
@@ -771,5 +843,6 @@ int main()
 
     execute_scheduler();
     print_result_table();
+    cleanup_all_memory();
     return 0;
 }
