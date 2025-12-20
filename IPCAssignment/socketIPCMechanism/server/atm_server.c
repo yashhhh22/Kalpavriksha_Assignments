@@ -9,7 +9,7 @@
 
 #define SERVER_PORT 9090
 #define BUFFER_SIZE 256
-#define ACCOUNT_FILE_PATH "./accountDB.txt"
+#define ACCOUNT_FILE_PATH "../resource/accountDB.txt"
 
 pthread_mutex_t accountFileMutex = PTHREAD_MUTEX_INITIALIZER;
 
