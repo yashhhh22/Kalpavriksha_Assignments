@@ -1,140 +1,214 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <errno.h>
-#include <limits.h>
 
+#define ATM_SERVER_PORT 8080
+#define IO_BUFFER_SIZE 1024
 
-#define SERVER_PORT 9090
-#define BUFFER_SIZE 256
+#define OPTION_WITHDRAW 1
+#define OPTION_DEPOSIT 2
+#define OPTION_CHECK_BALANCE 3
+#define OPTION_EXIT 4
 
-int readValidatedMenuChoice()
+#define OPTION_MIN 1
+#define OPTION_MAX 4
+
+#define STATUS_OK 1
+#define STATUS_ERROR 0
+
+void displayAtmOptions();
+int readMenuSelection();
+bool isValidMenuSelection(int selection);
+float readTransactionAmount();
+int buildRequestPayload(int selection, char *payload);
+int initializeClientSocket();
+int establishServerConnection(int socketDescriptor);
+void transmitRequest(int socketDescriptor, char *payload);
+void receiveServerMessage(int socketDescriptor);
+void runClientInteraction(int socketDescriptor);
+
+int main()
 {
-    char inputBuffer[BUFFER_SIZE];
-    char *conversionEnd;
-    long convertedValue;
+    int clientSocket = initializeClientSocket();
+
+    if (clientSocket < 0)
+    {
+        return 0;
+    }
+
+    if (establishServerConnection(clientSocket) == STATUS_ERROR)
+    {
+        close(clientSocket);
+        return 0;
+    }
+
+    runClientInteraction(clientSocket);
+
+    close(clientSocket);
+    return 0;
+}
+
+void runClientInteraction(int socketDescriptor)
+{
+    char requestPayload[IO_BUFFER_SIZE];
 
     while (1)
     {
-        printf("\n1. Withdraw\n2. Deposit\n3. Display Balance\n4. Exit\nEnter choice: ");
-        fflush(stdout);
+        displayAtmOptions();
+        int selectedOption = readMenuSelection();
 
-        if (fgets(inputBuffer, sizeof(inputBuffer), stdin) == NULL)
+        memset(requestPayload, 0, IO_BUFFER_SIZE);
+
+        if (!buildRequestPayload(selectedOption, requestPayload))
         {
-            continue;
+            transmitRequest(socketDescriptor, requestPayload);
+            printf("Session terminated.\n");
+            break;
         }
 
-        inputBuffer[strcspn(inputBuffer, "\n")] = '\0';
-        errno = 0;
-
-        convertedValue = strtol(inputBuffer, &conversionEnd, 10);
-
-        if (conversionEnd == inputBuffer || *conversionEnd != '\0')
-        {
-            printf("Invalid choice.\n");
-            continue;
-        }
-
-        if (convertedValue < 1 || convertedValue > 4)
-        {
-            printf("Choice out of range.\n");
-            continue;
-        }
-
-        return (int) convertedValue;
+        transmitRequest(socketDescriptor, requestPayload);
+        receiveServerMessage(socketDescriptor);
     }
 }
 
-long readValidatedAmount()
+void displayAtmOptions()
 {
-    char inputBuffer[BUFFER_SIZE];
-    char *conversionEnd;
-    long convertedValue;
+    printf("\n-----------------------------\n");
+    printf("ATM MENU\n");
+    printf("-----------------------------\n");
+    printf("1. Withdraw Money\n");
+    printf("2. Deposit Money\n");
+    printf("3. Check Balance\n");
+    printf("4. Exit\n");
+    printf("-----------------------------\n");
+}
+
+bool isValidMenuSelection(int selection)
+{
+    return (selection >= OPTION_MIN && selection <= OPTION_MAX);
+}
+
+int readMenuSelection()
+{
+    int selection;
+
+    while (1)
+    {
+        printf("Enter your choice: ");
+
+        if (scanf("%d", &selection) != 1)
+        {
+            printf("Invalid input. Please enter a number between 1 and 4.\n");
+            while (getchar() != '\n');
+            continue;
+        }
+
+        if (!isValidMenuSelection(selection))
+        {
+            printf("Invalid choice. Please select a valid option.\n");
+            continue;
+        }
+
+        while (getchar() != '\n');
+        return selection;
+    }
+}
+
+float readTransactionAmount()
+{
+    float amount;
 
     while (1)
     {
         printf("Enter amount: ");
-        fflush(stdout);
 
-        if (fgets(inputBuffer, sizeof(inputBuffer), stdin) == NULL)
+        if (scanf("%f", &amount) != 1 || amount <= 0)
         {
+            printf("Invalid amount. Enter a value greater than zero.\n");
+            while (getchar() != '\n');
             continue;
         }
 
-        inputBuffer[strcspn(inputBuffer, "\n")] = '\0';
-        errno = 0;
-
-        convertedValue = strtol(inputBuffer, &conversionEnd, 10);
-
-        if (conversionEnd == inputBuffer || *conversionEnd != '\0')
-        {
-            printf("Invalid numeric input.\n");
-            continue;
-        }
-
-        if (convertedValue <= 0 || convertedValue > INT_MAX)
-        {
-            printf("Invalid amount.\n");
-            continue;
-        }
-
-        return convertedValue;
+        while (getchar() != '\n');
+        return amount;
     }
 }
 
-int main()
+int buildRequestPayload(int selection, char *payload)
 {
-    while (1)
+    float amountValue = 0.0f;
+
+    if (selection == OPTION_WITHDRAW || selection == OPTION_DEPOSIT)
     {
-        int selectedOption = readValidatedMenuChoice();
-
-        if (selectedOption == 4)
-        {
-            break;
-        }
-
-        long amountValue = 0;
-        if (selectedOption == 1 || selectedOption == 2)
-        {
-            amountValue = readValidatedAmount();
-        }
-
-        int clientSocketDescriptor = socket(AF_INET, SOCK_STREAM, 0);
-        if (clientSocketDescriptor < 0)
-        {
-            exit(EXIT_FAILURE);
-        }
-
-        struct sockaddr_in serverAddress;
-        memset(&serverAddress, 0, sizeof(serverAddress));
-
-        serverAddress.sin_family = AF_INET;
-        serverAddress.sin_port = htons(SERVER_PORT);
-        inet_pton(AF_INET, "127.0.0.1", &serverAddress.sin_addr);
-
-        if (connect(clientSocketDescriptor, (struct sockaddr *) &serverAddress, sizeof(serverAddress)) < 0)
-        {
-            close(clientSocketDescriptor);
-            exit(EXIT_FAILURE);
-        }
-
-        char requestBuffer[BUFFER_SIZE];
-        snprintf(requestBuffer, sizeof(requestBuffer), "%d %ld", selectedOption, amountValue);
-        send(clientSocketDescriptor, requestBuffer, strlen(requestBuffer), 0);
-
-        char responseBuffer[BUFFER_SIZE];
-        ssize_t receivedBytes = recv(clientSocketDescriptor, responseBuffer, sizeof(responseBuffer) - 1, 0);
-
-        if (receivedBytes > 0)
-        {
-            responseBuffer[receivedBytes] = '\0';
-            printf("\n%s", responseBuffer);
-        }
-
-        close(clientSocketDescriptor);
+        amountValue = readTransactionAmount();
     }
 
-    return 0;
+    sprintf(payload, "%d %.2f", selection, amountValue);
+
+    if (selection == OPTION_EXIT)
+    {
+        return STATUS_ERROR;
+    }
+
+    return STATUS_OK;
+}
+
+int initializeClientSocket()
+{
+    int socketDescriptor = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (socketDescriptor < 0)
+    {
+        printf("Failed to create socket.\n");
+        return STATUS_ERROR;
+    }
+
+    return socketDescriptor;
+}
+
+int establishServerConnection(int socketDescriptor)
+{
+    struct sockaddr_in serverAddress;
+
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_port = htons(ATM_SERVER_PORT);
+    serverAddress.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    if (connect(socketDescriptor, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0)
+    {
+        printf("Connection to server failed.\n");
+        return STATUS_ERROR;
+    }
+
+    printf("Connected to ATM server successfully.\n");
+    return STATUS_OK;
+}
+
+void transmitRequest(int socketDescriptor, char *payload)
+{
+    send(socketDescriptor, payload, strlen(payload), 0);
+}
+
+void receiveServerMessage(int socketDescriptor)
+{
+    char serverResponse[IO_BUFFER_SIZE];
+    memset(serverResponse, 0, IO_BUFFER_SIZE);
+
+    int receivedBytes = recv(socketDescriptor, serverResponse, IO_BUFFER_SIZE, 0);
+
+    if (receivedBytes == 0)
+    {
+        printf("Server closed the connection.\n");
+        return;
+    }
+    else if (receivedBytes < 0)
+    {
+        perror("Receive failed");
+        return;
+    }
+
+    printf("\nServer response: %s\n", serverResponse);
 }
